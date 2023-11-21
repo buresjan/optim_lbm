@@ -1,0 +1,23 @@
+# Use this file to set up a conda environment for the project.
+# $ conda env create -f environment.yml
+name: optim_lbm
+channels:
+  - conda-forge
+dependencies:
+  - python=3.10
+  - numpy=1.26.0
+  - pandas=2.1.2
+  - matplotlib=3.8.1
+  - trimesh=4.0.2
+  - pyvista=0.42.3
+  - pip
+  - mayavi=4.8.1
+  - scipy=1.11.3
+  - gmsh=4.11.1
+  - pip:
+    - black[d]
+    - shapely
+    - networkx
+    - rtree
+    - mapbox_earcut
+    - tqdm
