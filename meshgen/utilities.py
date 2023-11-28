@@ -1,5 +1,47 @@
 from mayavi import mlab
+from scipy.ndimage import convolve
 import numpy as np
+
+
+def extract_surface(arr):
+    """
+    Extract the surface of a 3D array representing a voxelized mesh.
+
+    This function identifies the surface voxels of a 3D array. A surface voxel is defined as a filled
+    voxel (value True) that is adjacent to at least one empty voxel (value False). The function pads the
+    input array to handle edge cases, identifies the surface voxels, and then removes the padding before
+    returning the surface mask.
+
+    Parameters:
+    arr (numpy.ndarray): A 3D boolean array representing a voxelized mesh.
+
+    Returns:
+    numpy.ndarray: A 3D boolean array where surface voxels are marked as True.
+    """
+    # Pad the array by one voxel on all sides to handle edge cases during surface detection
+    padded_array = np.pad(arr, pad_width=1, mode="constant", constant_values=0)
+
+    # Initialize a mask for surface voxels
+    surface_mask = np.zeros_like(padded_array, dtype=bool)
+
+    # Iterate over each dimension (x, y, z) to identify surface voxels
+    for dim in range(3):
+        # Create slices for the current dimension
+        slice_front = [slice(None)] * 3
+        slice_back = [slice(None)] * 3
+        slice_front[dim] = slice(1, None)
+        slice_back[dim] = slice(None, -1)
+
+        # Identify surface voxels by checking adjacent voxels in the current dimension
+        surface_mask[tuple(slice_front)] |= (
+            padded_array[tuple(slice_front)] & ~padded_array[tuple(slice_back)]
+        )
+        surface_mask[tuple(slice_back)] |= (
+            padded_array[tuple(slice_back)] & ~padded_array[tuple(slice_front)]
+        )
+
+    # Remove padding and return the mask with only surface voxels marked
+    return surface_mask[1:-1, 1:-1, 1:-1]
 
 
 def vis(mesh):
@@ -15,27 +57,9 @@ def vis(mesh):
     # Adjust the scale factor for visualization; can be modified for denser meshes
     scale_factor = 1
 
-    # Initialize a mask for surface voxels
-    surface_mask = np.zeros_like(mesh, dtype=bool)
-
-    # Iterate over each dimension to identify surface voxels
-    for dim in range(3):
-        # Create slices for the current dimension
-        slice_front = [slice(None)] * 3
-        slice_back = [slice(None)] * 3
-        slice_front[dim] = slice(1, None)
-        slice_back[dim] = slice(None, -1)
-
-        # Identify surface voxels
-        surface_mask[tuple(slice_front)] |= (
-            mesh[tuple(slice_front)] & ~mesh[tuple(slice_back)]
-        )
-        surface_mask[tuple(slice_back)] |= (
-            mesh[tuple(slice_back)] & ~mesh[tuple(slice_front)]
-        )
-
     # Extract the coordinates of surface voxels in the mesh
-    x, y, z = np.where(surface_mask)
+    surface = extract_surface(mesh)
+    x, y, z = np.where(surface)
 
     # Visualize the surface voxels using cube glyphs
     mlab.points3d(

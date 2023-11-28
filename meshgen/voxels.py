@@ -2,6 +2,7 @@ import trimesh as trm
 import numpy as np
 import scipy
 import utilities
+import mesher
 
 from tqdm import tqdm  # Import tqdm
 
@@ -402,16 +403,18 @@ def complete_segment(segment, margins):
     return new_array
 
 
-def fill_slice(mesh_slice):
+def fill_slice(mesh_slice, leading_direction):
     """
-    Fill and prepare a slice of a mesh for further processing.
+    Fill a mesh slice and expand it along the leading direction.
 
-    This function takes a slice of a mesh (represented as a 2D array) and fills its internal voids.
-    After filling, it expands the slice into a 3D array by adding an extra dimension. This step is
-    typically used to prepare the slice for processes that require 3D input.
+    This function takes a slice of a mesh (represented as a 2D array), fills its internal voids,
+    and then expands this slice into a 3D array by adding an extra dimension along the specified
+    leading direction. This step is typically used to prepare the slice for processes that require
+    3D input or to maintain consistency in the mesh's dimensionality across operations.
 
     Parameters:
     mesh_slice (numpy.ndarray): A 2D array representing a slice of the mesh.
+    leading_direction (int): The axis along which to expand the slice (0 for x, 1 for y, 2 for z).
 
     Returns:
     numpy.ndarray: A 3D array representing the filled and expanded slice of the mesh.
@@ -419,8 +422,8 @@ def fill_slice(mesh_slice):
     # Fill the internal voids of the slice
     mesh_slice = fill_mesh_inside_surface(mesh_slice)
 
-    # Expand the 2D slice into a 3D array
-    mesh_slice = np.expand_dims(mesh_slice, axis=2)
+    # Expand the 2D slice into a 3D array along the specified leading direction
+    mesh_slice = np.expand_dims(mesh_slice, axis=leading_direction)
 
     return mesh_slice
 
@@ -495,7 +498,9 @@ def voxelize_with_splitting(mesh, voxel_size, split):
 
     # Process each segment independently
     # for submsh, margin in zip(submeshes, margins):
-    for submsh, margin in tqdm(zip(submeshes, margins), total=len(submeshes), desc="Voxelizing"):
+    for submsh, margin in tqdm(
+        zip(submeshes, margins), total=len(submeshes), desc="Voxelizing"
+    ):
         voxelized_segment = voxelize_without_splitting(submsh, voxel_size)
 
         # Complete the segment by adding necessary margins
@@ -510,32 +515,39 @@ def voxelize_with_splitting(mesh, voxel_size, split):
             comp = comp[1:-1, 1:-1, 0]
 
         # Fill the slice for further processing
-        comp = fill_slice(comp)
+        comp = fill_slice(comp, leading_direction)
 
         comps.append(comp)
 
     # Concatenate the processed segments along the leading direction
     ary = np.concatenate(comps, axis=leading_direction)
-    ary = ary[:, :, 1:-1]
+
+    # Adjust the concatenated array based on the leading direction
+    if leading_direction == 0:
+        ary = ary[1:-1, :, :]
+    elif leading_direction == 1:
+        ary = ary[:, 1:-1, :]
+    else:
+        ary = ary[:, :, 1:-1]
 
     # Adjust edge layers based on the leading direction
     if leading_direction == 0:
-        first_layer = fill_slice(ary[0, :, :])
-        last_layer = fill_slice(ary[-1, :, :])
+        first_layer = fill_slice(ary[0, :, :], 0)
+        last_layer = fill_slice(ary[-1, :, :], 0)
         ary = np.concatenate([first_layer, ary, last_layer], axis=0)
     elif leading_direction == 1:
-        first_layer = fill_slice(ary[:, 0, :])
-        last_layer = fill_slice(ary[:, -1, :])
+        first_layer = fill_slice(ary[:, 0, :], 1)
+        last_layer = fill_slice(ary[:, -1, :], 1)
         ary = np.concatenate([first_layer, ary, last_layer], axis=1)
     else:  # leading_direction == 2
-        first_layer = fill_slice(ary[:, :, 0])
-        last_layer = fill_slice(ary[:, :, -1])
+        first_layer = fill_slice(ary[:, :, 0], 2)
+        last_layer = fill_slice(ary[:, :, -1], 2)
         ary = np.concatenate([first_layer, ary, last_layer], axis=2)
 
     return ary
 
 
-def voxelize_mesh(path, res=1, split=None):
+def voxelize_mesh(name, res=1, split=None, **kwargs):
     """
     Load a mesh from a file, voxelize it with or without splitting, and adjust it for LBM simulations.
 
@@ -553,8 +565,15 @@ def voxelize_mesh(path, res=1, split=None):
     Returns:
     numpy.ndarray: The voxelized and adjusted mesh, suitable for LBM simulations.
     """
+
+    modified_kwargs = kwargs
+    modified_kwargs["resolution"] = res
+
+    stl_file_path = mesher.gmsh_surface(name, **modified_kwargs)
+
     # Load the mesh from the specified path
-    mesh = trm.load(path)
+    mesh = trm.load(stl_file_path)
+    # mesh = trm.load(path)
 
     # Calculate the voxel size based on the mesh's bounds and resolution factor
     voxel_size = calculate_voxel_size(mesh, res)
@@ -563,8 +582,17 @@ def voxelize_mesh(path, res=1, split=None):
         # Voxelize the mesh without splitting
         output = voxelize_without_splitting(mesh, voxel_size)
     else:
+        # Calculate the bounding box dimensions of the mesh
+        bounds = mesh.bounds
+        x, y, z = bounds[0]
+        dx, dy, dz = bounds[1] - bounds[0]
+
+        # Generate a box-shaped mesh based on the bounding box dimensions and voxel size
+        name = mesher.box_stl(name, x, y, z, dx, dy, dz, voxel_size)
+        boxed_mesh = trm.load(name)
+
         # Voxelize the mesh with splitting along the leading direction
-        output = voxelize_with_splitting(mesh, voxel_size, split)
+        output = voxelize_with_splitting(boxed_mesh, voxel_size, split)
 
     # Adjust the voxelized mesh for LBM simulations
     lbm_mesh = complete_mesh(output)
@@ -573,8 +601,9 @@ def voxelize_mesh(path, res=1, split=None):
 
 
 if __name__ == "__main__":
-    mesh_path = "//meshgen/trubickafill1.stl"
-    mesh = voxelize_mesh(mesh_path, res=5, split=5 * 128)
+    name = "tcpc_classic"
+    # mesh = voxelize_mesh(mesh_path, res=3, split=3 * 128, angle=-np.pi/20, h=0.01)
+    msh = voxelize_mesh(name, res=3, split=3 * 128, angle=0, h=0.01)
 
     # utilities.array_to_textfile(~mesh, 'output')
-    utilities.vis(mesh)
+    utilities.vis(msh)
