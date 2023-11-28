@@ -4,7 +4,8 @@ h = DEFINE_H;
 Mesh.CharacteristicLengthMin = h;
 Mesh.CharacteristicLengthMax = h;
 
-RES = DEFINE_RESOLUTION;
+//RES = DEFINE_RESOLUTION;
+RES = 1.0;
 ANGLE = DEFINE_ANGLE;
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////
