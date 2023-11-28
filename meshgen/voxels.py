@@ -5,6 +5,7 @@ import utilities
 import mesher
 
 from tqdm import tqdm  # Import tqdm
+from concurrent.futures import ProcessPoolExecutor
 
 
 def load_mesh(path):
@@ -472,7 +473,42 @@ def voxelize_without_splitting(mesh, voxel_size):
     return mesh.voxelized(voxel_size).matrix
 
 
-def voxelize_with_splitting(mesh, voxel_size, split):
+def process_submesh(submsh, margin, voxel_size, leading_direction):
+    """
+    Process a single submesh for voxelization.
+
+    This function handles the voxelization of a single mesh segment. It voxelizes the segment,
+    completes it by adding necessary margins, and adjusts the slicing based on the leading direction.
+    Finally, it fills the slice to ensure a solid segment.
+
+    Parameters:
+    submsh (trimesh.Trimesh): The submesh segment to be voxelized.
+    margin (numpy.ndarray): The margin to be added around the voxelized segment.
+    voxel_size (float): The size of each voxel.
+    leading_direction (int): The leading direction for slicing (0 for x, 1 for y, 2 for z).
+
+    Returns:
+    numpy.ndarray: A 3D array representing the processed and filled submesh segment.
+    """
+    # Voxelizing the submesh without splitting
+    voxelized_segment = voxelize_without_splitting(submsh, voxel_size)
+
+    # Completing the segment by adding necessary margins
+    comp = complete_segment(voxelized_segment, margin.astype(int))
+
+    # Adjusting slicing based on the leading direction
+    if leading_direction == 0:
+        comp = comp[0, 1:-1, 1:-1]  # Slicing for the x-direction
+    elif leading_direction == 1:
+        comp = comp[1:-1, 0, 1:-1]  # Slicing for the y-direction
+    else:  # leading_direction == 2
+        comp = comp[1:-1, 1:-1, 0]  # Slicing for the z-direction
+
+    # Filling the slice for further processing
+    return fill_slice(comp, leading_direction)
+
+
+def voxelize_with_splitting(mesh, voxel_size, split, num_processes=1):
     """
     Voxelizes a mesh with splitting along the leading direction.
 
@@ -484,6 +520,9 @@ def voxelize_with_splitting(mesh, voxel_size, split):
     mesh (trimesh.Trimesh): The mesh to be voxelized.
     voxel_size (float): The size of each voxel.
     split (int): The number of segments to split the mesh into.
+    num_processes(int, optional): The number of subprocesses the main process should be divided into.
+                                  Default 1 = no subprocesses.
+
 
     Returns:
     numpy.ndarray: A 3D array representing the voxelized mesh.
@@ -496,28 +535,14 @@ def voxelize_with_splitting(mesh, voxel_size, split):
     submeshes, margins = split_mesh(mesh, voxel_size, n_segments=split)
     comps = []
 
-    # Process each segment independently
-    # for submsh, margin in zip(submeshes, margins):
-    for submsh, margin in tqdm(
-        zip(submeshes, margins), total=len(submeshes), desc="Voxelizing"
-    ):
-        voxelized_segment = voxelize_without_splitting(submsh, voxel_size)
+    # Parallel processing of submeshes
+    with ProcessPoolExecutor(max_workers=num_processes) as executor:
+        # Prepare arguments for each submesh processing
+        futures = [executor.submit(process_submesh, submsh, margin, voxel_size, leading_direction)
+                   for submsh, margin in zip(submeshes, margins)]
 
-        # Complete the segment by adding necessary margins
-        comp = complete_segment(voxelized_segment, margin.astype(int))
-
-        # Adjust slicing based on the leading direction
-        if leading_direction == 0:
-            comp = comp[0, 1:-1, 1:-1]
-        elif leading_direction == 1:
-            comp = comp[1:-1, 0, 1:-1]
-        else:  # leading_direction == 2
-            comp = comp[1:-1, 1:-1, 0]
-
-        # Fill the slice for further processing
-        comp = fill_slice(comp, leading_direction)
-
-        comps.append(comp)
+        # Collecting results with progress display
+        comps = [future.result() for future in tqdm(futures, total=len(submeshes), desc="Voxelizing")]
 
     # Concatenate the processed segments along the leading direction
     ary = np.concatenate(comps, axis=leading_direction)
@@ -547,7 +572,7 @@ def voxelize_with_splitting(mesh, voxel_size, split):
     return ary
 
 
-def voxelize_mesh(name, res=1, split=None, **kwargs):
+def voxelize_mesh(name, res=1, split=None, num_processes=1, **kwargs):
     """
     Load a mesh from a file, voxelize it with or without splitting, and adjust it for LBM simulations.
 
@@ -561,6 +586,9 @@ def voxelize_mesh(name, res=1, split=None, **kwargs):
     res (int, optional): A resolution factor for voxelization. Default is 1.
     split (int, optional): The number of segments to split the mesh into before voxelization.
                            If None, the mesh is voxelized without splitting. Default is None.
+    num_processes(int, optional): The number of subprocesses the main process should be divided into.
+                                  Default 1 = no subprocesses.
+
 
     Returns:
     numpy.ndarray: The voxelized and adjusted mesh, suitable for LBM simulations.
@@ -573,7 +601,6 @@ def voxelize_mesh(name, res=1, split=None, **kwargs):
 
     # Load the mesh from the specified path
     mesh = trm.load(stl_file_path)
-    # mesh = trm.load(path)
 
     # Calculate the voxel size based on the mesh's bounds and resolution factor
     voxel_size = calculate_voxel_size(mesh, res)
@@ -590,9 +617,8 @@ def voxelize_mesh(name, res=1, split=None, **kwargs):
         # Generate a box-shaped mesh based on the bounding box dimensions and voxel size
         name = mesher.box_stl(name, x, y, z, dx, dy, dz, voxel_size)
         boxed_mesh = trm.load(name)
-
         # Voxelize the mesh with splitting along the leading direction
-        output = voxelize_with_splitting(boxed_mesh, voxel_size, split)
+        output = voxelize_with_splitting(boxed_mesh, voxel_size, split, num_processes=num_processes)
 
     # Adjust the voxelized mesh for LBM simulations
     lbm_mesh = complete_mesh(output)
@@ -602,8 +628,11 @@ def voxelize_mesh(name, res=1, split=None, **kwargs):
 
 if __name__ == "__main__":
     name = "tcpc_classic"
+    import time
     # mesh = voxelize_mesh(mesh_path, res=3, split=3 * 128, angle=-np.pi/20, h=0.01)
-    msh = voxelize_mesh(name, res=3, split=3 * 128, angle=0, h=0.01)
-
-    # utilities.array_to_textfile(~mesh, 'output')
+    start_time = time.time()
+    msh = voxelize_mesh(name, res=3, split=3 * 128, num_processes=8, angle=0, h=0.01)
+    print(time.time() - start_time)
+    print(msh.shape)
+    # utilities.array_to_textfile(~msh, 'output')
     utilities.vis(msh)
