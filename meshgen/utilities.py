@@ -44,7 +44,7 @@ def extract_surface(arr):
     return surface_mask[1:-1, 1:-1, 1:-1]
 
 
-def vis(mesh):
+def vis(mesh, dim=3):
     """
     Visualize the surface of a voxelized mesh.
 
@@ -53,30 +53,50 @@ def vis(mesh):
 
     Parameters:
     mesh (numpy.ndarray): A 3D boolean array representing the voxelized mesh.
+    dim (int, optional): Dimension of the input mesh.
+                         Default 3 = input mesh is a 3D mesh.
     """
     # Adjust the scale factor for visualization; can be modified for denser meshes
     scale_factor = 1
 
     # Extract the coordinates of surface voxels in the mesh
-    surface = extract_surface(mesh)
-    x, y, z = np.where(surface)
+    if dim == 3:
+        surface = extract_surface(mesh)
+        x, y, z = np.where(surface)
 
-    # Visualize the surface voxels using cube glyphs
-    mlab.points3d(
-        x,
-        y,
-        z,
-        mode="cube",
-        color=(0, 0, 1),  # Blue color for the cubes
-        scale_mode="none",
-        scale_factor=scale_factor,
-    )
+        # Visualize the surface voxels using cube glyphs
+        mlab.points3d(
+            x,
+            y,
+            z,
+            mode="cube",
+            color=(0, 0, 1),  # Blue color for the cubes
+            scale_mode="none",
+            scale_factor=scale_factor,
+        )
 
-    # Configure the viewing angle for better perception
-    mlab.view(azimuth=45, elevation=45)
+        # Configure the viewing angle for better perception
+        mlab.view(azimuth=45, elevation=45)
 
-    # Display the 3D visualization
-    mlab.show()
+        # Display the 3D visualization
+        mlab.show()
+
+    else:
+        # Convert bool values to 1 and 0 and replace 0 values with NaN so that they are not visualized
+        mesh = mesh.astype(int)
+        mesh = np.where(mesh == 0, np.nan, mesh)
+
+        # Create a mesh grid (x, y coordinates)
+        x, y = np.mgrid[0 : mesh.shape[0], 0 : mesh.shape[1]]
+
+        # Visualize using Mayavi
+        mlab.surf(x, y, mesh)
+
+        # Configure the viewing angle for better perception
+        mlab.view(azimuth=0, elevation=0)
+
+        # Display the 2D visualization
+        mlab.show()
 
 
 def array_to_textfile(array, filename):
