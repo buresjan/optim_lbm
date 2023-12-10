@@ -71,8 +71,14 @@ def fill_extended_mesh(original_mesh, new_mesh):
     direction_idx = get_leading_direction(original_mesh.shape)
     remaining_indices = [i for i in range(3) if i != direction_idx]
 
-    # Fill the original mesh inside its surface (assuming this is a custom function)
+    # Fill the original mesh inside its surface
     original_mesh = fill_mesh_inside_surface(original_mesh)
+
+    # TODO: this is just to make things work
+    if (new_shape[0] * new_shape[1] * new_shape[2]) < (
+        original_shape[0] * original_shape[1] * original_shape[2]
+    ):
+        return original_mesh
 
     # Embed the original mesh into the new mesh based on the leading direction
     if remaining_indices == [0, 1]:
@@ -470,7 +476,9 @@ def voxelize_without_splitting(mesh, voxel_size):
     numpy.ndarray: A 3D array representing the voxelized mesh, where each cell is a voxel.
     """
     # Convert the mesh into a voxelized form with the specified voxel size
-    return mesh.voxelized(voxel_size).matrix
+    voxelized_object = mesh.voxelized(voxel_size).matrix
+
+    return voxelized_object
 
 
 def process_submesh(submsh, margin, voxel_size, leading_direction):
@@ -508,7 +516,7 @@ def process_submesh(submsh, margin, voxel_size, leading_direction):
     return fill_slice(comp, leading_direction)
 
 
-def voxelize_with_splitting(mesh, voxel_size, split, num_processes=1):
+def voxelize_with_splitting(mesh, voxel_size, split, num_processes=1, dim=3):
     """
     Voxelizes a mesh with splitting along the leading direction.
 
@@ -522,7 +530,8 @@ def voxelize_with_splitting(mesh, voxel_size, split, num_processes=1):
     split (int): The number of segments to split the mesh into.
     num_processes(int, optional): The number of subprocesses the main process should be divided into.
                                   Default 1 = no subprocesses.
-
+    dim (int, optional): Desired dimension of the output mesh.
+                         Default 3 = output mesh is a 3D mesh.
 
     Returns:
     numpy.ndarray: A 3D array representing the voxelized mesh.
@@ -531,29 +540,39 @@ def voxelize_with_splitting(mesh, voxel_size, split, num_processes=1):
     bounds = mesh.bounds
     leading_direction = get_leading_direction(tuple(bounds[1] - bounds[0]))
 
+    if dim == 2 and leading_direction == 2:
+        error_msg = f"2D mesh not supported (not located in XY plane)."
+        raise ValueError(error_msg)
+
     # Split the mesh into segments along the leading direction
     submeshes, margins = split_mesh(mesh, voxel_size, n_segments=split)
-    comps = []
 
     # Parallel processing of submeshes
     with ProcessPoolExecutor(max_workers=num_processes) as executor:
         # Prepare arguments for each submesh processing
-        futures = [executor.submit(process_submesh, submsh, margin, voxel_size, leading_direction)
-                   for submsh, margin in zip(submeshes, margins)]
+        futures = [
+            executor.submit(
+                process_submesh, submsh, margin, voxel_size, leading_direction
+            )
+            for submsh, margin in zip(submeshes, margins)
+        ]
 
         # Collecting results with progress display
-        comps = [future.result() for future in tqdm(futures, total=len(submeshes), desc="Voxelizing")]
+        comps = [
+            future.result()
+            for future in tqdm(futures, total=len(submeshes), desc="Voxelizing")
+        ]
 
     # Concatenate the processed segments along the leading direction
     ary = np.concatenate(comps, axis=leading_direction)
 
     # Adjust the concatenated array based on the leading direction
     if leading_direction == 0:
-        ary = ary[1:-1, :, :]
+        ary = ary[1:-1, :-1, :]
     elif leading_direction == 1:
-        ary = ary[:, 1:-1, :]
+        ary = ary[:-1, 1:-1, :]
     else:
-        ary = ary[:, :, 1:-1]
+        ary = ary[:-1, :, 1:-1]
 
     # Adjust edge layers based on the leading direction
     if leading_direction == 0:
@@ -569,10 +588,14 @@ def voxelize_with_splitting(mesh, voxel_size, split, num_processes=1):
         last_layer = fill_slice(ary[:, :, -1], 2)
         ary = np.concatenate([first_layer, ary, last_layer], axis=2)
 
+    # If output mesh is a 2D mesh, decrease the array in dimension
+    if dim == 2:
+        ary = np.squeeze(ary, axis=2)
+
     return ary
 
 
-def voxelize_mesh(name, res=1, split=None, num_processes=1, **kwargs):
+def voxelize_mesh(name, res=1, split=None, num_processes=1, dim=3, **kwargs):
     """
     Load a mesh from a file, voxelize it with or without splitting, and adjust it for LBM simulations.
 
@@ -588,7 +611,8 @@ def voxelize_mesh(name, res=1, split=None, num_processes=1, **kwargs):
                            If None, the mesh is voxelized without splitting. Default is None.
     num_processes(int, optional): The number of subprocesses the main process should be divided into.
                                   Default 1 = no subprocesses.
-
+    dim (int, optional): Desired dimension of the output mesh.
+                         Default 3 = output mesh is a 3D mesh.
 
     Returns:
     numpy.ndarray: The voxelized and adjusted mesh, suitable for LBM simulations.
@@ -600,7 +624,7 @@ def voxelize_mesh(name, res=1, split=None, num_processes=1, **kwargs):
     stl_file_path = mesher.gmsh_surface(name, **modified_kwargs)
 
     # Load the mesh from the specified path
-    mesh = trm.load(stl_file_path)
+    mesh = load_mesh(stl_file_path)
 
     # Calculate the voxel size based on the mesh's bounds and resolution factor
     voxel_size = calculate_voxel_size(mesh, res)
@@ -618,21 +642,36 @@ def voxelize_mesh(name, res=1, split=None, num_processes=1, **kwargs):
         name = mesher.box_stl(name, x, y, z, dx, dy, dz, voxel_size)
         boxed_mesh = trm.load(name)
         # Voxelize the mesh with splitting along the leading direction
-        output = voxelize_with_splitting(boxed_mesh, voxel_size, split, num_processes=num_processes)
+        output = voxelize_with_splitting(
+            boxed_mesh, voxel_size, split, num_processes=num_processes, dim=dim
+        )
 
-    # Adjust the voxelized mesh for LBM simulations
+    # If the mesh is meant for 2D simulations, no further operations have to be done
+    if dim == 2:
+        lbm_mesh = output
+        return lbm_mesh
+
+    # Adjust the voxelized mesh for 3D LBM simulations
     lbm_mesh = complete_mesh(output)
 
     return lbm_mesh
 
 
 if __name__ == "__main__":
-    name = "tcpc_classic"
     import time
-    # mesh = voxelize_mesh(mesh_path, res=3, split=3 * 128, angle=-np.pi/20, h=0.01)
+
     start_time = time.time()
-    msh = voxelize_mesh(name, res=3, split=3 * 128, num_processes=8, angle=0, h=0.01)
-    print(time.time() - start_time)
+
+    # name = "tcpc_classic"
+    name = "2dtcpc"
+    msh = voxelize_mesh(
+        name, res=3, split=3 * 128, num_processes=6, dim=2, offset=0.3, h=0.01
+    )
     print(msh.shape)
+
+    print(time.time() - start_time)
+
     # utilities.array_to_textfile(~msh, 'output')
-    utilities.vis(msh)
+    utilities.vis(msh, dim=2)
+#     TODO: optimize output array - delete coordinates
+#     TODO: try benchmark for easy tcpc
