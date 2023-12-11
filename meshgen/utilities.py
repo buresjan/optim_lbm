@@ -1,6 +1,40 @@
 from mayavi import mlab
-from scipy.ndimage import convolve
 import numpy as np
+import os
+import fnmatch
+
+
+def delete_stl_files(root_dir, exclude_files=None):
+    """
+    Delete .stl files from a specified directory and its subdirectories,
+    with an option to exclude certain files from deletion.
+
+    This function recursively traverses through the given directory and
+    all of its subdirectories to find and delete files with the .stl extension.
+    It provides an option to exclude specific .stl files from deletion based on their filenames.
+
+    Parameters:
+    root_dir (str): The root directory path where the search and deletion of .stl files begins.
+    exclude_files (list of str, optional): A list of .stl filenames that should be excluded from deletion.
+                                           Defaults to None, meaning no files are excluded.
+
+    Returns:
+    None: This function does not return anything. It directly deletes files from the filesystem.
+    """
+
+    # Check if exclude_files is None and, if so, initialize it as an empty list
+    if exclude_files is None:
+        exclude_files = []
+
+    # Walk through all directories and subdirectories starting from root_dir
+    for dirpath, dirnames, filenames in os.walk(root_dir):
+        # Filter for .stl files in the current directory
+        for filename in fnmatch.filter(filenames, "*.stl"):
+            # Proceed only if the file is not in the exclude list
+            if filename not in exclude_files:
+                file_path = os.path.join(dirpath, filename)
+                print("Deleted: ", filename)
+                os.remove(file_path)  # Delete the file
 
 
 def extract_surface(arr):
