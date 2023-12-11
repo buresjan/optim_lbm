@@ -1,6 +1,6 @@
 import trimesh as trm
 import numpy as np
-import scipy
+from scipy import ndimage
 import utilities
 import mesher
 
@@ -204,7 +204,7 @@ def fill_mesh_inside_surface(mesh):
     numpy.ndarray: The modified mesh with internal voids filled.
     """
     # Fill the internal voids of the mesh using SciPy's binary_fill_holes function
-    mesh[scipy.ndimage.binary_fill_holes(mesh)] = True
+    mesh[ndimage.binary_fill_holes(mesh)] = True
 
     return mesh
 
@@ -646,6 +646,8 @@ def voxelize_mesh(name, res=1, split=None, num_processes=1, dim=3, **kwargs):
             boxed_mesh, voxel_size, split, num_processes=num_processes, dim=dim
         )
 
+    utilities.delete_stl_files("../meshgen/")
+
     # If the mesh is meant for 2D simulations, no further operations have to be done
     if dim == 2:
         lbm_mesh = output
@@ -665,7 +667,7 @@ if __name__ == "__main__":
     # name = "tcpc_classic"
     name = "2dtcpc"
     msh = voxelize_mesh(
-        name, res=3, split=3 * 128, num_processes=6, dim=2, offset=0.3, h=0.01
+        name, res=2, split=2 * 128, num_processes=6, dim=2, offset=0.3, h=0.01
     )
     print(msh.shape)
 
