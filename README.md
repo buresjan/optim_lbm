@@ -1,5 +1,7 @@
 # Project Overview
 
+![optim-lbm](https://github.com/buresjan/optim_lbm/assets/16631982/daffdb01-0163-4cf7-94aa-ae28e0778380)
+
 This project is composed of three integral parts, each pertaining to a different aspect of computational modeling and optimization. Below is an outline of the project's structure and instructions on how to navigate and use the components.
 
 ## Directory Structure
